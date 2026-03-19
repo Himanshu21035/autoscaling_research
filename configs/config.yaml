@@ -1,0 +1,50 @@
+
+# configs/config.yaml
+
+simulator:
+  timestep_seconds: 60
+  capacity_per_replica: 100       # RPS each replica can handle
+  base_latency_ms: 50
+  cold_start_options: [60, 120, 180]   # seconds
+  min_replicas: 1
+  max_replicas: 50
+
+mpc:
+  horizon: 12                     # steps ahead (= 12 minutes)
+  lambda_cost: 1
+  lambda_sla: 50
+  lambda_stability: 5
+  solver: ECOS_BB
+  max_solver_time_ms: 500
+
+adapt:
+  alpha: 0.3                      # EMA smoothing factor
+  beta: 1.5                       # uncertainty buffer multiplier
+
+grace:
+  error_window: 10                # last N forecast errors
+  min_confidence: 0.1             # never go below 10% MPC weight
+
+safety:
+  cooldown_seconds: 300
+  max_scale_per_step: 5
+  emergency_threshold: 0.95
+  oscillation_window: 6
+
+forecasting:
+  lookback_minutes: 60
+  horizon_minutes: 12
+  retrain_interval_hours: 24
+
+data:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  synthetic_dir: data/synthetic
+  scale_factors:
+    burstgpt: 600.0
+    azure: 60.0
+    alibaba: 50.0
+
+logging:
+  level: INFO
+  log_dir: results/logs
