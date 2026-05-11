@@ -74,3 +74,29 @@ synthetic:
     spike_start_day: 3      # fixed for reproducibility — documented below
     spike_start_hour: 14
     spike_duration_minutes: 90
+policies:
+  threshold:
+    target_rps_per_replica: 100.0
+
+  pid:
+    target_rps: 300.0
+    kp: 0.5
+    ki: 0.1
+    kd: 0.05
+    integral_limit: 500.0
+
+  hpa:
+    target_rps_per_replica: 100.0
+    scale_up_cooldown: 1       # steps (1 step = 1 min)
+    scale_down_cooldown: 5     # mirrors K8s 5-min stabilization window
+adapt:
+  alpha: 0.3                  # EWMA smoothing factor
+  epsilon_steps: 1            # FH OPT safety margin
+  cold_start_min_s: 30.0      # lower bound on estimate
+  cold_start_max_s: 600.0     # upper bound on estimate
+
+policies:
+  mpc:
+    lambda_sla:  10.0         # SLA violation penalty weight
+    lambda_cost:  1.0         # replica running cost weight
+    lambda_stab:  0.5         # replica change penalty weight
