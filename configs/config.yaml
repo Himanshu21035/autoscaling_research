@@ -48,3 +48,8 @@ data:
 logging:
   level: INFO
   log_dir: results/logs
+  
+metrics:
+  rolling_windows: [5, 15, 60]       # minutes
+  burst_sigma: 2.0                    # σ multiplier for burst_flag
+  min_history_steps: 30               # min WindowBuffer length before forecasting
