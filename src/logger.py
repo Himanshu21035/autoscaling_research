@@ -2,6 +2,7 @@ import logging
 import sys
 from pathlib import Path
 
+
 LOG_DIR= Path(__file__).resolve().parent.parent/"results"/"logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -15,6 +16,8 @@ def get_logger(name:str, level: int=logging.INFO)-> logging.Logger:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     console_handler=logging.StreamHandler(sys.stdout)
+    if hasattr(console_handler.stream, 'reconfigure'):
+            console_handler.stream.reconfigure(encoding='utf-8')
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 

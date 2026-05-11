@@ -48,8 +48,29 @@ data:
 logging:
   level: INFO
   log_dir: results/logs
-  
+
 metrics:
   rolling_windows: [5, 15, 60]       # minutes
   burst_sigma: 2.0                    # σ multiplier for burst_flag
   min_history_steps: 30               # min WindowBuffer length before forecasting
+
+synthetic:
+  n_days: 7
+  seed: 42
+  smooth:
+    base_rps: 300.0
+    amplitude: 150.0
+    noise_std: 20.0
+  bursty:
+    base_rps: 200.0
+    noise_std: 30.0
+    spike_probability: 0.01
+    spike_multiplier_range: [3.0, 8.0]
+    spike_duration_range: [5, 20]
+  flash_crowd:
+    base_rps: 150.0
+    noise_std: 15.0
+    spike_multiplier: 10.0
+    spike_start_day: 3      # fixed for reproducibility — documented below
+    spike_start_hour: 14
+    spike_duration_minutes: 90
