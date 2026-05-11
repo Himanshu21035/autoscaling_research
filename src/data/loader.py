@@ -11,6 +11,10 @@ RAW_DIR = Path(CONFIG["data"]["raw_dir"])
 PROCESSED_DIR = Path(CONFIG["data"]["processed_dir"])
 SCALE_FACTORS = CONFIG.get("data", {}).get("scale_factors", {})
 
+_DATA_CFG  = CONFIG.get("data", {})
+_DATA_DIR  = Path(_DATA_CFG.get("data_dir", "data/raw"))
+_TIMESTEP  = CONFIG["simulator"]["timestep_seconds"]
+
 def load_burstgpt(
     files: list[str] | None = None,
     resample_freq: str = "1min",
@@ -197,3 +201,157 @@ def load_alibaba(
         f"max_rps={result['rps'].max():.3f}"
     )
     return result
+def load_trace(source: str = "synthetic", **kwargs) -> pd.DataFrame:
+    """
+    Load a workload trace.
+
+    Args:
+        source: "azure" | "synthetic"
+        **kwargs: passed to the specific loader
+
+    Returns:
+        pd.DataFrame with columns [timestamp, rps], sorted by timestamp,
+        resampled to simulator timestep, no NaNs.
+    """
+    loaders = {
+        "azure":     _load_azure,
+        "synthetic": _load_synthetic,
+    }
+    key = source.strip().lower()
+    if key not in loaders:
+        raise ValueError(
+            f"Unknown source '{source}'. "
+            f"Valid options: {sorted(loaders.keys())}"
+        )
+    df = loaders[key](**kwargs)
+    df = _normalise(df)
+    logger.info(
+        f"Loaded '{source}' trace: {len(df)} steps, "
+        f"mean_rps={df['rps'].mean():.1f}, "
+        f"max_rps={df['rps'].max():.1f}"
+    )
+    return df
+
+
+def as_numpy(df: pd.DataFrame) -> np.ndarray:
+    """Extract rps column as float64 numpy array."""
+    return df["rps"].to_numpy(dtype=float)
+def _load_azure(
+    path: str | Path | None = None,
+    rps_col: str | None = None,
+    time_col: str | None = None,
+) -> pd.DataFrame:
+    """
+    Load Azure LLM trace CSV.
+
+    Expected CSV columns (configurable):
+      timestamp: ISO8601 or Unix epoch seconds
+      rps:       requests per second (float)
+
+    If the file does not exist, falls back to synthetic data with a warning.
+    """
+    cfg       = _DATA_CFG.get("azure", {})
+    path      = Path(path or cfg.get("path", _DATA_DIR / "azure_trace.csv"))
+    rps_col   = rps_col  or cfg.get("rps_col",  "rps")
+    time_col  = time_col or cfg.get("time_col", "timestamp")
+
+    if not path.exists():
+        logger.warning(
+            f"Azure trace not found at {path} — "
+            f"falling back to synthetic data"
+        )
+        return _load_synthetic()
+
+    df = pd.read_csv(path)
+
+    # Flexible timestamp parsing: epoch seconds or ISO string
+    if pd.api.types.is_numeric_dtype(df[time_col]):
+        df["timestamp"] = pd.to_datetime(df[time_col], unit="s", utc=True)
+    else:
+        df["timestamp"] = pd.to_datetime(df[time_col], utc=True)
+
+    df = df.rename(columns={rps_col: "rps"})[["timestamp", "rps"]]
+    df["rps"] = pd.to_numeric(df["rps"], errors="coerce").fillna(0.0)
+    return df
+
+
+# ── Synthetic Loader ──────────────────────────────────────────────────
+
+def _load_synthetic(
+    n_steps: int | None = None,
+    pattern: str = "diurnal_burst",
+    seed: int = 42,
+) -> pd.DataFrame:
+    """
+    Generate a synthetic workload trace.
+
+    Patterns:
+      diurnal_burst : daily sine wave with random burst spikes
+      flat          : constant low load
+      ramp          : linearly increasing load
+      step          : sudden step changes
+    """
+    cfg     = _DATA_CFG.get("synthetic", {})
+    n_steps = n_steps or cfg.get("n_steps", 1440)
+    rng     = np.random.default_rng(seed)
+    t       = np.arange(n_steps)
+
+    if pattern == "diurnal_burst":
+        base   = 200 + 150 * np.sin(2 * np.pi * t / (24 * 60 / _TIMESTEP))
+        noise  = rng.normal(0, 20, n_steps)
+        bursts = np.zeros(n_steps)
+        # Inject 3–6 random burst events
+        n_bursts = rng.integers(3, 7)
+        for _ in range(n_bursts):
+            start  = rng.integers(0, n_steps - 30)
+            length = rng.integers(10, 30)
+            height = rng.uniform(300, 800)
+            bursts[start:start + length] += height
+        rps = np.maximum(0, base + noise + bursts)
+
+    elif pattern == "flat":
+        rps = np.full(n_steps, cfg.get("flat_rps", 300.0))
+
+    elif pattern == "ramp":
+        rps = np.linspace(
+            cfg.get("ramp_start", 50),
+            cfg.get("ramp_end",   800),
+            n_steps,
+        )
+
+    elif pattern == "step":
+        rps        = np.full(n_steps, 100.0)
+        step_every = n_steps // 4
+        for i, level in enumerate([200.0, 500.0, 100.0]):
+            rps[(i + 1) * step_every:] = level
+
+    else:
+        raise ValueError(f"Unknown pattern '{pattern}'")
+
+    timestamps = pd.date_range(
+        "2024-01-01", periods=n_steps,
+        freq=f"{_TIMESTEP}s"
+    )
+    return pd.DataFrame({"timestamp": timestamps, "rps": rps})
+
+
+# ── Normalise ─────────────────────────────────────────────────────────
+def _normalise(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Resample to simulator timestep, forward-fill gaps, clip negatives.
+    """
+    df = df.sort_values("timestamp").reset_index(drop=True)
+    df = df.set_index("timestamp")
+
+    df = (
+        df["rps"]
+        .resample(f"{_TIMESTEP}s")
+        .mean()
+        .interpolate("linear")
+        .ffill()          # pandas 2.x — replaces fillna(method="ffill")
+        .fillna(0.0)
+        .clip(lower=0.0)
+        .reset_index()
+    )
+    df.columns = ["timestamp", "rps"]
+    return df

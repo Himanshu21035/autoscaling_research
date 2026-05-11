@@ -1,4 +1,21 @@
-# src/simulator/core.py
+"""
+Discrete-time simulation engine.
+
+One step = one timestep (default 60s).
+
+Per step:
+  1. Get current RPS from trace
+  2. Policy computes desired replicas
+     (with optional forecast from forecaster)
+  3. Cold start: new replicas enter warming queue
+  4. Capacity = warm_replicas * capacity_per_replica
+  5. Compute latency, SLA violation, cost
+  6. ADAPT observes any completed cold start events
+  7. Log metrics
+
+Returns SimResult dataclass with full per-step metrics.
+"""
+from __future__ import annotations
 import pandas as pd
 import numpy as np
 from polars.selectors import duration
@@ -10,9 +27,14 @@ from src.logger import get_logger
 from src.simulator.adapt import ADAPTTracker
 from src.config import CONFIG
 
+import math
+from dataclasses import dataclass, field
+from src.policies.base import BasePolicy
+from src.simulator.adapt import ADAPTTracker
 logger = get_logger(__name__)
 
 SIM_CFG = CONFIG["simulator"]
+_SIM_CFG = CONFIG["simulator"]
 adapt_cfg = CONFIG.get("adapt", {})
 
 class AutoscalerSimulator:
@@ -189,3 +211,201 @@ class AutoscalerSimulator:
             "warming_replicas": self._cold_start_tracker.warming_count(),
             "total_cost": round(self.total_cost, 4),
         }
+@dataclass
+class StepMetrics:
+    step:             int
+    rps:              float
+    desired_replicas: int
+    warm_replicas:    int
+    capacity:         float
+    latency_ms:       float
+    sla_violated:     bool
+    cost:             float
+    adapt_estimate_s: float
+
+
+@dataclass
+class SimResult:
+    policy_name:      str
+    forecaster_name:  str
+    steps:            int
+    metrics:          list[StepMetrics] = field(default_factory=list)
+
+    # Aggregate (computed by finalise())
+    total_cost:       float = 0.0
+    sla_violation_pct: float = 0.0
+    avg_latency_ms:   float = 0.0
+    avg_replicas:     float = 0.0
+    peak_replicas:    int   = 0
+
+    def finalise(self) -> "SimResult":
+        if not self.metrics:
+            return self
+        self.total_cost        = sum(m.cost         for m in self.metrics)
+        self.sla_violation_pct = (
+            sum(1 for m in self.metrics if m.sla_violated) / len(self.metrics) * 100
+        )
+        self.avg_latency_ms    = np.mean([m.latency_ms    for m in self.metrics])
+        self.avg_replicas      = np.mean([m.warm_replicas for m in self.metrics])
+        self.peak_replicas     = max(m.warm_replicas for m in self.metrics)
+        return self
+
+    def summary(self) -> dict:
+        return {
+            "policy":         self.policy_name,
+            "forecaster":     self.forecaster_name,
+            "steps":          self.steps,
+            "total_cost":     round(self.total_cost, 4),
+            "sla_pct":        round(self.sla_violation_pct, 2),
+            "avg_latency_ms": round(self.avg_latency_ms, 1),
+            "avg_replicas":   round(self.avg_replicas, 1),
+            "peak_replicas":  self.peak_replicas,
+        }
+
+
+def run_simulation(
+    trace:          np.ndarray,
+    policy:         BasePolicy,
+    forecaster=None,            # BaseForecaster | None
+    adapt:          ADAPTTracker | None = None,
+    forecast_every: int = 1,    # reforecast every N steps (1 = every step)
+    refine_fit_every: int = 0,  # refit forecaster every N steps (0 = never)
+) -> SimResult:
+    """
+    Run one simulation episode.
+
+    Args:
+        trace:           1D RPS array (test split)
+        policy:          instantiated BasePolicy
+        forecaster:      optional BaseForecaster (already fitted on train split)
+        adapt:           optional ADAPTTracker (shared with MPC policy if given)
+        forecast_every:  how often to call forecaster.predict() [default: every step]
+        refine_fit_every: refit forecaster on expanding window every N steps (0=off)
+
+    Returns:
+        SimResult with per-step metrics and aggregates
+    """
+    # Config
+    cap_per_replica = _SIM_CFG["capacity_per_replica"]
+    cold_start_s    = _SIM_CFG["cold_start_s"]
+    timestep_s      = _SIM_CFG["timestep_seconds"]
+    sla_latency_ms  = _SIM_CFG["sla_latency_ms"]
+    cost_per_replica_step = _SIM_CFG.get("cost_per_replica_step", 1.0)
+
+    cold_start_steps = max(1, math.ceil(cold_start_s / timestep_s))
+
+    policy_name     = type(policy).__name__
+    forecaster_name = forecaster.name if forecaster else "none"
+
+    result = SimResult(
+        policy_name=policy_name,
+        forecaster_name=forecaster_name,
+        steps=len(trace),
+    )
+
+    # State
+    warm_replicas   = _SIM_CFG.get("initial_replicas", 2)
+    warming_queue: list[tuple[int, int]] = []  # (ready_at_step, n_replicas)
+    current_forecast: np.ndarray | None = None
+    train_buffer: list[float] = []
+
+    for step, rps in enumerate(trace):
+        # ── 1. Reforecast ──────────────────────────────────────────────
+        if forecaster is not None and step % forecast_every == 0:
+            h = adapt.optimal_horizon() if adapt else cold_start_steps + 1
+            try:
+                current_forecast = forecaster.timed_predict(h)
+            except Exception as e:
+                logger.warning(f"Step {step}: forecast failed ({e})")
+                current_forecast = np.full(h, rps)
+
+        # ── 2. Policy decision ─────────────────────────────────────────
+        adapt_est = adapt.estimate_s if adapt else cold_start_s
+        context = {
+            "warm_replicas":      warm_replicas,
+            "adapt_estimate_s":   adapt_est,
+        }
+        if current_forecast is not None:
+            context["forecast"] = current_forecast
+
+        desired = policy.compute_replicas(
+            current_rps=float(rps),
+            current_replicas=warm_replicas,
+            step=step,
+            **context,
+        )
+
+        # ── 3. Cold start queue ────────────────────────────────────────
+        delta = desired - warm_replicas
+        if delta > 0:
+            ready_at = step + cold_start_steps
+            warming_queue.append((ready_at, delta))
+            # Notify ADAPT that a scale-up event was requested
+            if adapt:
+                adapt.observe_event(
+                    t_requested=step * timestep_s,
+                    t_ready=ready_at * timestep_s,
+                )
+        elif delta < 0:
+            warm_replicas = max(
+                _SIM_CFG.get("min_replicas", 1),
+                warm_replicas + delta,
+            )
+
+        # Promote replicas that have finished warming
+        newly_ready = [n for (r, n) in warming_queue if r <= step]
+        warming_queue = [(r, n) for (r, n) in warming_queue if r > step]
+        warm_replicas += sum(newly_ready)
+        warm_replicas = min(warm_replicas, _SIM_CFG.get("max_replicas", 50))
+
+        # ── 4. Capacity & metrics ──────────────────────────────────────
+        capacity   = warm_replicas * cap_per_replica
+        utilisation = min(1.0, float(rps) / max(capacity, 1.0))
+        latency_ms  = _compute_latency(utilisation)
+        sla_violated = latency_ms > sla_latency_ms
+        cost         = warm_replicas * cost_per_replica_step
+
+        # ── 5. Online forecaster update ────────────────────────────────
+        if forecaster is not None:
+            forecaster.update(float(rps))
+            train_buffer.append(float(rps))
+
+            if (refine_fit_every > 0
+                    and step > 0
+                    and step % refine_fit_every == 0):
+                try:
+                    forecaster.timed_fit(np.array(train_buffer))
+                    logger.debug(f"Step {step}: refitted forecaster")
+                except Exception as e:
+                    logger.warning(f"Step {step}: refit failed ({e})")
+
+        result.metrics.append(StepMetrics(
+            step=step,
+            rps=float(rps),
+            desired_replicas=desired,
+            warm_replicas=warm_replicas,
+            capacity=capacity,
+            latency_ms=latency_ms,
+            sla_violated=sla_violated,
+            cost=cost,
+            adapt_estimate_s=adapt_est,
+        ))
+
+    return result.finalise()
+
+
+def _compute_latency(utilisation: float) -> float:
+    """
+    M/M/1 queue-inspired latency model.
+
+    utilisation = rps / capacity
+    latency_ms  = base_ms / (1 - utilisation) when util < 1
+                = sla_latency_ms * 3           when overloaded (violation)
+    """
+    base_ms      = _SIM_CFG.get("base_latency_ms", 50.0)
+    sla_ms       = _SIM_CFG["sla_latency_ms"]
+    overload_mul = _SIM_CFG.get("overload_latency_multiplier", 3.0)
+
+    if utilisation >= 1.0:
+        return sla_ms * overload_mul
+    return base_ms / max(1.0 - utilisation, 0.001)

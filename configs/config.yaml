@@ -44,6 +44,15 @@ data:
     burstgpt: 600.0
     azure: 60.0
     alibaba: 50.0
+  azure:
+    path: data/raw/azure_trace.csv
+    rps_col: rps
+    time_col: timestamp
+  synthetic:
+    n_steps: 1440
+    flat_rps: 300.0
+    ramp_start: 50.0
+    ramp_end: 800.0
 
 logging:
   level: INFO
@@ -100,3 +109,33 @@ policies:
     lambda_sla:  10.0         # SLA violation penalty weight
     lambda_cost:  1.0         # replica running cost weight
     lambda_stab:  0.5         # replica change penalty weight
+forecasting:
+  arima:
+    max_p: 5
+    max_q: 5
+    online_window: 30
+
+  prophet:
+    changepoint_prior_scale: 0.15
+
+  lstm:
+    window_size: 30
+    hidden_size: 64
+    num_layers: 2
+    max_epochs: 100
+    learning_rate: 0.001
+    patience: 10
+    min_series_length: 50
+simulator:
+  timestep_seconds:           60
+  capacity_per_replica:       100.0
+  cold_start_s:               120.0
+  sla_latency_ms:             500.0
+  base_latency_ms:            50.0
+  overload_latency_multiplier: 3.0
+  cost_per_replica_step:      1.0
+  initial_replicas:           2
+  min_replicas:               1
+  max_replicas:               50
+
+  

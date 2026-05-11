@@ -1,7 +1,20 @@
 # src/data/splitter.py
+"""
+Train / validation / test splitter for time series.
+
+Strict temporal split — no shuffling, no leakage.
+
+  |────── train ──────|── val ──|── test ──|
+  0                  70%       80%        100%
+
+Returns numpy arrays (rps values only) for clean forecaster API.
+"""
+from __future__ import annotations
+import numpy as np
 import pandas as pd
 from dataclasses import dataclass
 from src.logger import get_logger
+from src.config import CONFIG
 
 logger = get_logger(__name__)
 
@@ -83,4 +96,63 @@ def split_by_ratio(
         train_days=(train.index.max() - train.index.min()).total_seconds() / 86400,
         val_days=(val.index.max() - val.index.min()).total_seconds() / 86400,
         test_days=(test.index.max() - test.index.min()).total_seconds() / 86400,
+    )
+@dataclass
+class TraceSplit:
+    train:     np.ndarray
+    val:       np.ndarray
+    test:      np.ndarray
+    train_pct: float
+    val_pct:   float
+    test_pct:  float
+
+    def __post_init__(self):
+        total = len(self.train) + len(self.val) + len(self.test)
+        logger.info(
+            f"TraceSplit: total={total} | "
+            f"train={len(self.train)} ({self.train_pct:.0%}) | "
+            f"val={len(self.val)} ({self.val_pct:.0%}) | "
+            f"test={len(self.test)} ({self.test_pct:.0%})"
+        )
+
+    @property
+    def train_val(self) -> np.ndarray:
+        """train + val concatenated — for final model fit before test."""
+        return np.concatenate([self.train, self.val])
+
+
+def split(
+    series: np.ndarray | pd.DataFrame,
+    train_frac: float = 0.70,
+    val_frac:   float = 0.10,
+) -> TraceSplit:
+    if isinstance(series, pd.DataFrame):
+        series = series["rps"].to_numpy(dtype=float)
+
+    series = np.asarray(series, dtype=float)
+    n = len(series)
+
+    if n < 10:
+        raise ValueError(f"Series too short to split: {n} steps")
+    if not (0 < train_frac < 1) or not (0 < val_frac < 1):
+        raise ValueError("train_frac and val_frac must be in (0, 1)")
+    if train_frac + val_frac >= 1.0:
+        raise ValueError(
+            f"train_frac + val_frac must be < 1, "
+            f"got {train_frac + val_frac}"
+        )
+
+    # Compute boundaries with round() to avoid float accumulation error
+    # e.g. int(1000 * (0.70 + 0.10)) = int(799.999...) = 799 — wrong
+    i_train = round(n * train_frac)
+    i_val   = i_train + round(n * val_frac)   # avoids cumulative float error
+
+    test_frac = 1.0 - train_frac - val_frac
+    return TraceSplit(
+        train     = series[:i_train],
+        val       = series[i_train:i_val],
+        test      = series[i_val:],
+        train_pct = train_frac,
+        val_pct   = val_frac,
+        test_pct  = test_frac,
     )

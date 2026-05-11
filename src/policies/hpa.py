@@ -1,4 +1,3 @@
-# src/policies/hpa.py
 import math
 from src.policies.base import BasePolicy
 from src.config import CONFIG
@@ -6,7 +5,8 @@ from src.logger import get_logger
 
 logger = get_logger(__name__)
 
-_POL_CFG = CONFIG.get("policies", {}).get("hpa", {})
+_CFG = CONFIG.get("policies", {}).get("hpa", {})
+_SIM = CONFIG.get("simulator", {})
 
 
 class HPAPolicy(BasePolicy):
@@ -14,77 +14,59 @@ class HPAPolicy(BasePolicy):
     def __init__(
         self,
         target_rps_per_replica: float | None = None,
-        scale_up_cooldown: int | None = None,
-        scale_down_cooldown: int | None = None,
-        min_replicas: int | None = None,
-        max_replicas: int | None = None,
+        scale_up_stabilization: int | None = None,
+        scale_down_stabilization: int | None = None,
     ):
-        super().__init__(min_replicas, max_replicas)
-        cap = CONFIG["simulator"]["capacity_per_replica"]
+        super().__init__("HPA")   # name only — base reads config for bounds
+
         self.target_rps_per_replica = (
-            target_rps_per_replica
-            if target_rps_per_replica is not None
-            else _POL_CFG.get("target_rps_per_replica", cap)
+            target_rps_per_replica if target_rps_per_replica is not None
+            else float(_CFG.get("target_rps_per_replica",
+                       _SIM.get("capacity_per_replica", 100.0)))
         )
-        self.scale_up_cooldown = (
-            scale_up_cooldown
-            if scale_up_cooldown is not None
-            else _POL_CFG.get("scale_up_cooldown", 1)
+        self.scale_up_stabilization   = (
+            scale_up_stabilization if scale_up_stabilization is not None
+            else int(_CFG.get("scale_up_stabilization", 0))
         )
-        self.scale_down_cooldown = (
-            scale_down_cooldown
-            if scale_down_cooldown is not None
-            else _POL_CFG.get("scale_down_cooldown", 5)
+        self.scale_down_stabilization = (
+            scale_down_stabilization if scale_down_stabilization is not None
+            else int(_CFG.get("scale_down_stabilization", 5))
         )
 
-        if self.target_rps_per_replica <= 0:
-            raise ValueError(
-                f"target_rps_per_replica must be > 0, "
-                f"got {self.target_rps_per_replica}"
-            )
-        if self.scale_up_cooldown < 1 or self.scale_down_cooldown < 1:
-            raise ValueError(
-                "scale_up_cooldown and scale_down_cooldown must be >= 1"
-            )
+        self._scale_down_counter = 0
 
-        # Track last step ANY scaling event occurred
-        # Scale-down is blocked for scale_down_cooldown steps
-        # after either a scale-up OR a scale-down event
-        self._last_scale_up_step   = -999
-        self._last_scale_down_step = -999
+        logger.info(
+            f"HPAPolicy init | target_rps={self.target_rps_per_replica} "
+            f"stabilization(up={self.scale_up_stabilization}, "
+            f"down={self.scale_down_stabilization})"
+        )
 
     def compute_replicas(
         self,
         current_rps: float,
         current_replicas: int,
         step: int,
-        **context,
+        **kwargs,
     ) -> int:
-        desired = self._clamp(current_rps / self.target_rps_per_replica)
+        desired = math.ceil(current_rps / max(self.target_rps_per_replica, 1.0))
+        desired = self._clamp(desired)
 
         if desired > current_replicas:
-            if step - self._last_scale_up_step >= self.scale_up_cooldown:
-                self._last_scale_up_step = step
+            self._scale_down_counter = 0
+            return desired
+
+        if desired < current_replicas:
+            self._scale_down_counter += 1
+            if self._scale_down_counter >= self.scale_down_stabilization:
+                self._scale_down_counter = 0
                 return desired
             return current_replicas
 
-        elif desired < current_replicas:
-            # Scale-down blocked if within cooldown of EITHER last scale-up
-            # OR last scale-down — prevents thrashing after a spike
-            steps_since_up   = step - self._last_scale_up_step
-            steps_since_down = step - self._last_scale_down_step
-            if (steps_since_up  >= self.scale_down_cooldown and
-                    steps_since_down >= self.scale_down_cooldown):
-                self._last_scale_down_step = step
-                return desired
-            return current_replicas
-
+        self._scale_down_counter = 0
         return current_replicas
 
-    def reset(self):
-        self._last_scale_up_step   = -999
-        self._last_scale_down_step = -999
-
+    def reset(self) -> None:
+        self._scale_down_counter = 0
     def __repr__(self):
         return (
             f"HPAPolicy(target={self.target_rps_per_replica} RPS/replica, "
