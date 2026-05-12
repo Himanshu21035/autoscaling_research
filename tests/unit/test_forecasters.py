@@ -133,6 +133,14 @@ class TestLatencyHooks:
 
 class TestARIMA:
 
+    def test_fit_populates_model(self):
+        """ARIMA fit should create a real pmdarima model."""
+        f = create_forecaster("arima", min_series_length=10)
+        series = np.array([100.0, 110.0, 120.0, 130.0, 140.0, 150.0,
+                           160.0, 170.0, 180.0, 190.0, 200.0, 210.0])
+        f.fit(series)
+        assert f._model is not None, "ARIMA fit left the model unset"
+
     def test_flat_series_fallback_uses_last_observed(self):
         """Fallback must return last observed value, NOT zero."""
         f = create_forecaster("arima", min_series_length=10)
@@ -152,7 +160,12 @@ class TestARIMA:
 
     def test_update_truly_refits_model(self):
         """After update(), model should have been refit (not same object)."""
-        f = create_forecaster("arima", min_series_length=10, online_window=20)
+        f = create_forecaster(
+            "arima",
+            min_series_length=10,
+            online_window=20,
+            refit_every=5,
+        )
         f.fit(flat_series(n=30, value=300.0))
         model_before = id(f._model)
         # Feed enough updates to trigger refit (online_window=20 new values)

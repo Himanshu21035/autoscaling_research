@@ -1,0 +1,79 @@
+version: "3.9"
+
+services:
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    container_name: autoscaler-api
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - api_outputs:/app/outputs
+      # Mount config.yaml from project root into container at runtime.
+      # Change ../config.yaml to match your actual config file path/name.
+      - ../configs/config.yaml:/app/configs/config.yaml:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout:  5s
+      retries:  5
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - autoscaler
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: autoscaler-prometheus
+    ports:
+      - "${PROM_PORT:-9090}:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-lifecycle"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - autoscaler
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: autoscaler-grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-autoscaler}
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/autoscaler.json
+      - GF_SERVER_ROOT_URL=http://localhost:${GRAFANA_PORT:-3000}
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - autoscaler
+
+volumes:
+  api_outputs:
+  prom_data:
+  grafana_data:
+
+networks:
+  autoscaler:
+    driver: bridge

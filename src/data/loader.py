@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 from src.logger import get_logger
 from src.config import CONFIG
-
+from src.data.synthetic_patterns import _generate_synthetic
 logger = get_logger(__name__)
 
 RAW_DIR = Path(CONFIG["data"]["raw_dir"])
@@ -278,61 +278,26 @@ def _load_azure(
 # ── Synthetic Loader ──────────────────────────────────────────────────
 
 def _load_synthetic(
-    n_steps: int | None = None,
     pattern: str = "diurnal_burst",
-    seed: int = 42,
-) -> pd.DataFrame:
+    steps:   int = 288,
+    seed:    int = 42,
+    **kwargs,
+) -> "pd.DataFrame":
     """
-    Generate a synthetic workload trace.
+    Load a synthetic workload trace.
 
-    Patterns:
-      diurnal_burst : daily sine wave with random burst spikes
-      flat          : constant low load
-      ramp          : linearly increasing load
-      step          : sudden step changes
+    Supported patterns:
+        diurnal_burst   daily sine + random bursts  (original)
+        smooth          slow sine, low noise         (new)
+        bursty          low base + sharp spikes      (new)
+        bimodal         alternating low/high blocks  (new)
+        flash_crowd     quiet then one big spike     (new)
+
+    Returns:
+        DataFrame with columns [timestamp, rps]
     """
-    cfg     = _DATA_CFG.get("synthetic", {})
-    n_steps = n_steps or cfg.get("n_steps", 1440)
-    rng     = np.random.default_rng(seed)
-    t       = np.arange(n_steps)
+    return _generate_synthetic(pattern=pattern, steps=steps, seed=seed)
 
-    if pattern == "diurnal_burst":
-        base   = 200 + 150 * np.sin(2 * np.pi * t / (24 * 60 / _TIMESTEP))
-        noise  = rng.normal(0, 20, n_steps)
-        bursts = np.zeros(n_steps)
-        # Inject 3–6 random burst events
-        n_bursts = rng.integers(3, 7)
-        for _ in range(n_bursts):
-            start  = rng.integers(0, n_steps - 30)
-            length = rng.integers(10, 30)
-            height = rng.uniform(300, 800)
-            bursts[start:start + length] += height
-        rps = np.maximum(0, base + noise + bursts)
-
-    elif pattern == "flat":
-        rps = np.full(n_steps, cfg.get("flat_rps", 300.0))
-
-    elif pattern == "ramp":
-        rps = np.linspace(
-            cfg.get("ramp_start", 50),
-            cfg.get("ramp_end",   800),
-            n_steps,
-        )
-
-    elif pattern == "step":
-        rps        = np.full(n_steps, 100.0)
-        step_every = n_steps // 4
-        for i, level in enumerate([200.0, 500.0, 100.0]):
-            rps[(i + 1) * step_every:] = level
-
-    else:
-        raise ValueError(f"Unknown pattern '{pattern}'")
-
-    timestamps = pd.date_range(
-        "2024-01-01", periods=n_steps,
-        freq=f"{_TIMESTEP}s"
-    )
-    return pd.DataFrame({"timestamp": timestamps, "rps": rps})
 
 
 # ── Normalise ─────────────────────────────────────────────────────────

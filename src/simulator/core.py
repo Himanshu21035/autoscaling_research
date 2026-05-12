@@ -327,6 +327,10 @@ def run_simulation(
         }
         if current_forecast is not None:
             context["forecast"] = current_forecast
+        
+        # ── FH-OPT: Pass live ADAPT-derived horizon to MPC if available
+        if adapt is not None and hasattr(policy, "use_fh_opt") and policy.use_fh_opt:
+            context["cold_start_steps"] = max(0, adapt.optimal_horizon() - 1)
 
         desired = policy.compute_replicas(
             current_rps=float(rps),

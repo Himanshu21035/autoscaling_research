@@ -1,13 +1,7 @@
 
 # configs/config.yaml
 
-simulator:
-  timestep_seconds: 60
-  capacity_per_replica: 100       # RPS each replica can handle
-  base_latency_ms: 50
-  cold_start_options: [60, 120, 180]   # seconds
-  min_replicas: 1
-  max_replicas: 50
+
 
 mpc:
   horizon: 12                     # steps ahead (= 12 minutes)
@@ -17,9 +11,9 @@ mpc:
   solver: ECOS_BB
   max_solver_time_ms: 500
 
-adapt:
-  alpha: 0.3                      # EMA smoothing factor
-  beta: 1.5                       # uncertainty buffer multiplier
+# adapt:
+#   alpha: 0.3                      # EMA smoothing factor
+#   beta: 1.5                       # uncertainty buffer multiplier
 
 grace:
   error_window: 10                # last N forecast errors
@@ -83,6 +77,18 @@ synthetic:
     spike_start_day: 3      # fixed for reproducibility — documented below
     spike_start_hour: 14
     spike_duration_minutes: 90
+  slow_ramp_up:
+    start_rps: 50.0
+    end_rps: 350.0
+    noise_std: 5.0
+    burst_height: 80.0
+    burst_width: 8
+  periodic_spikes:
+    base_rps: 60.0
+    noise_std: 3.0
+    spike_period_steps: 24   # 24 steps = 2 hours at 5-min resolution
+    spike_height: 200.0
+    spike_width: 6
 policies:
   threshold:
     target_rps_per_replica: 100.0
@@ -99,7 +105,8 @@ policies:
     scale_up_cooldown: 1       # steps (1 step = 1 min)
     scale_down_cooldown: 5     # mirrors K8s 5-min stabilization window
 adapt:
-  alpha: 0.3                  # EWMA smoothing factor
+  alpha: 0.3                      # EWMA smoothing factor
+  beta: 1.5                       # uncertainty buffer multiplier 
   epsilon_steps: 1            # FH OPT safety margin
   cold_start_min_s: 30.0      # lower bound on estimate
   cold_start_max_s: 600.0     # upper bound on estimate
@@ -114,9 +121,10 @@ forecasting:
     max_p: 5
     max_q: 5
     online_window: 30
+    refit_every: 50
 
   prophet:
-    changepoint_prior_scale: 0.15
+    changepoint_prior_scale: 0.001
 
   lstm:
     window_size: 30
@@ -127,15 +135,16 @@ forecasting:
     patience: 10
     min_series_length: 50
 simulator:
-  timestep_seconds:           60
-  capacity_per_replica:       100.0
-  cold_start_s:               120.0
-  sla_latency_ms:             500.0
-  base_latency_ms:            50.0
+  timestep_seconds: 60
+  capacity_per_replica: 100.0
+  cold_start_s: 120.0             
+  cold_start_options: [60, 120, 180]
+  sla_latency_ms: 500.0           
+  base_latency_ms: 50.0
   overload_latency_multiplier: 3.0
-  cost_per_replica_step:      1.0
-  initial_replicas:           2
-  min_replicas:               1
-  max_replicas:               50
+  cost_per_replica_step: 1.0
+  initial_replicas: 2
+  min_replicas: 1
+  max_replicas: 50
 
   

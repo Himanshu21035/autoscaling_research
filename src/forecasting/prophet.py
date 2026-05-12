@@ -69,7 +69,7 @@ class ProphetForecaster(BaseForecaster):
                 changepoint_prior_scale=self.changepoint_prior_scale,
                 interval_width=self.interval_width,
                 uncertainty_samples=0,        # faster — disables CI computation
-                daily_seasonality=True,        # enables detection of intraday/diurnal patterns
+                daily_seasonality=False,        # enables detection of intraday/diurnal patterns
                 weekly_seasonality=False,      # disabled: single-day training not enough for weekly cycles
             )
             self._model.fit(df)

@@ -32,17 +32,17 @@ from src.simulator.core import run_simulation
 from src.policies import create_policy
 from src.forecasting import create_forecaster
 from src.config import CONFIG
-
+from src.api.store import metrics_store, results_store
 _SIM_CFG = CONFIG["simulator"]
 
 FORECASTER_OVERRIDES = {
-    "arima":   {"lambda_sla": 200.0, "lambda_cost": 1.0, "lambda_stab": 0.5},
+    "arima":   {"lambda_sla": 150.0, "lambda_cost": 1.0, "lambda_stab": 0.5},
     "prophet": {"lambda_sla": 150.0, "lambda_cost": 1.0, "lambda_stab": 0.5},
     "lstm":    {"lambda_sla": 50.0,  "lambda_cost": 1.0, "lambda_stab": 0.5},
 }
 FORECASTER_CONFIG = {
-    "arima":   {"lambda_sla": 200.0, "lambda_cost": 1.0, "lambda_stab": 0.5, "forecast_margin": 1.35, "cold_start_steps": 0},
-    "prophet": {"lambda_sla": 150.0, "lambda_cost": 1.0, "lambda_stab": 0.5, "forecast_margin": 0.095, "cold_start_steps": 2},
+    "arima":   {"lambda_sla": 150.0, "lambda_cost": 1.0, "lambda_stab": 0.5, "forecast_margin": 1.0, "cold_start_steps": 0},
+    "prophet": {"lambda_sla": 150.0, "lambda_cost": 1.0, "lambda_stab": 0.5, "forecast_margin": 1.06, "cold_start_steps": 2},
     "lstm":    {"lambda_sla": 50.0,  "lambda_cost": 1.0, "lambda_stab": 0.5, "forecast_margin": 1.15, "cold_start_steps": 0},
 }
 def make_adapt() -> ADAPTTracker:
@@ -127,7 +127,7 @@ def main():
 
     results = []
 
-    # 1 — HPA baseline (reactive, no forecaster)
+    # 1 — HPA baseline
     print("\n[1/4] HPA baseline...", flush=True)
     results.append(run_hpa(sp.test))
 
@@ -158,7 +158,12 @@ def main():
 
     print_table(results)
 
-    # Key assertion: MPC variants must not be WORSE than HPA on SLA
+    # ── Push to API stores ─────────────────────────────────────────────────
+    results_store.set(results)                    # summary table → /v1/policy/results/latest
+    print(f"  pushed {len(results)} run summaries to results_store")
+    # ──────────────────────────────────────────────────────────────────────
+
+    # Key assertion
     hpa_sla = results[0]["sla_pct"]
     for r in results[1:]:
         if r["sla_pct"] > hpa_sla * 1.5:
@@ -168,7 +173,6 @@ def main():
             )
 
     print("\n✅ Step 9 smoke test complete")
-
 
 if __name__ == "__main__":
     main()

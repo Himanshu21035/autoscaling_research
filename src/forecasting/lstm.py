@@ -144,6 +144,7 @@ class LSTMForecaster(BaseForecaster):
                     if pred.dim() == 0:
                         pred = pred.unsqueeze(0)
                     loss = loss_fn(pred, yb)
+                    val_loss += loss.item()
             val_loss /= max(1, len(loader_val))
             val_losses.append(val_loss)
 

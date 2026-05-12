@@ -25,6 +25,7 @@ class MPCPolicy(BasePolicy):
     def __init__(
         self,
         adapt_tracker=None,
+        use_fh_opt: bool = False,
         lambda_sla:          float | None = None,
         lambda_cost:         float | None = None,
         lambda_stab:         float | None = None,
@@ -38,6 +39,7 @@ class MPCPolicy(BasePolicy):
         super().__init__("MPC")
 
         self.adapt_tracker = adapt_tracker
+        self.use_fh_opt = use_fh_opt
 
         # ── Weights ────────────────────────────────────────────────────
         self.lambda_sla  = lambda_sla  if lambda_sla  is not None else float(_CFG.get("lambda_sla",  50.0))
@@ -77,7 +79,8 @@ class MPCPolicy(BasePolicy):
             f"lam_cost={self.lambda_cost} lam_stab={self.lambda_stab} "
             f"cold_start_steps={self.cold_start_steps} "
             f"forecast_margin={self.forecast_margin} "
-            f"adapt={'yes' if adapt_tracker else 'no'}"
+            f"adapt={'yes' if adapt_tracker else 'no'} "
+            f"fh_opt={'yes' if use_fh_opt else 'no'}"
         )
 
     def compute_replicas(
@@ -87,9 +90,15 @@ class MPCPolicy(BasePolicy):
         step:             int,
         forecast:         np.ndarray | None = None,
         warm_replicas:    int | None = None,
+        cold_start_steps: int | None = None,
         **kwargs,
     ) -> int:
         warm = warm_replicas if warm_replicas is not None else current_replicas
+
+        # ── FH-OPT: Use live ADAPT-derived horizon if available ────────
+        effective_cold_start_steps = self.cold_start_steps
+        if self.use_fh_opt and cold_start_steps is not None:
+            effective_cold_start_steps = max(0, int(cold_start_steps))
 
         # ── 1. Reactive floor — hard lower bound from current load ─────
         reactive_floor = max(
@@ -101,7 +110,7 @@ class MPCPolicy(BasePolicy):
         if forecast is not None and len(forecast) > 0:
             # Skip the first cold_start_steps (already committed/warming),
             # then look at the next half-horizon for the upcoming peak.
-            offset  = self.cold_start_steps
+            offset  = effective_cold_start_steps
             usable  = forecast[offset:] if len(forecast) > offset else forecast
             cutoff  = max(1, len(usable) // 2)
             raw     = float(np.max(usable))

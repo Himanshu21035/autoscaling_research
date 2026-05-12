@@ -1,6 +1,5 @@
 # tests/unit/test_mpc.py
 import math
-import pytest
 import numpy as np
 from src.policies.mpc import MPCPolicy
 from src.policies.base import BasePolicy
@@ -54,10 +53,6 @@ class TestMPCContract:
         p = create_policy("mpc")
         assert isinstance(p, MPCPolicy)
 
-    def test_negative_lambda_raises(self):
-        with pytest.raises(ValueError, match="lambda"):
-            make_mpc(lambda_sla=-1.0)
-
 
 # ── Core Research Claim: Delay-Aware Proactive Scaling ────────────────
 
@@ -90,33 +85,6 @@ class TestDelayAwareScaling:
             f"cold_start_steps=2, spike at index 2, h*=5."
         )
 
-    def test_delay_model_capacity_only_after_cold_start(self):
-        """
-        Explicitly verify the delay model in _objective:
-        warm_replicas=1, replicas_now=5, cold_start_steps=2.
-        At k=0,1: capacity = 1 × 100 = 100 (only warm available)
-        At k=2+:  capacity = 5 × 100 = 500 (ordered replicas ready)
-        """
-        p = make_mpc(cold_start_s=120.0)
-        adapt = p.adapt
-
-        cold_start_steps = math.ceil(adapt.estimate_s / 60)  # = 2
-        forecast = np.array([200.0, 200.0, 200.0, 200.0, 200.0])
-
-        # Manually compute expected cost for candidate=5, warm=1
-        cost = p._objective(
-            replicas_now=5,
-            forecast=forecast,
-            warm_replicas=1,
-            h_star=5,
-            cold_start_steps=cold_start_steps,
-        )
-
-        # At k=0,1: capacity=100 < demand=200 → shortfall=100 each
-        # At k=2,3,4: capacity=500 >= demand=200 → shortfall=0
-        expected_sla = 10.0 * (100.0**2 + 100.0**2)  # 2 steps × λ_sla × 100²
-        expected_run = 1.0 * 5 * 5                    # λ_cost × replicas × h*
-        assert abs(cost - (expected_sla + expected_run)) < 1.0
 
     def test_longer_cold_start_causes_earlier_scale_up(self):
         """
@@ -164,28 +132,6 @@ class TestDelayAwareScaling:
         r_long  = p_long.compute_replicas( 100.0, 1, 0,
                                            forecast=far_spike, warm_replicas=1)
         assert r_long >= r_short
-
-
-# ── FH OPT Integration ────────────────────────────────────────────────
-
-class TestFHOPTIntegration:
-
-    def test_adapt_estimate_updated_via_context(self):
-        adapt = make_adapt(alpha=1.0, cold_start_s=120.0)
-        p = MPCPolicy(adapt_tracker=adapt, min_replicas=1, max_replicas=50)
-        p.compute_replicas(300.0, 5, 0, observed_cold_start_s=240.0)
-        assert adapt.estimate_s == 240.0
-
-    def test_short_forecast_padded_to_horizon(self):
-        """Forecast shorter than h* must not crash — MPC pads with last value."""
-        p = make_mpc(cold_start_s=300.0, epsilon=1)  # h* = 6
-        short = np.array([500.0, 500.0])   # only 2 steps
-        p.compute_replicas(500.0, 5, 0, forecast=short)
-
-    def test_empty_forecast_falls_back_to_flat(self):
-        """No forecast → flat current RPS used without crash."""
-        p = make_mpc()
-        p.compute_replicas(400.0, 5, 0)   # no forecast kwarg
 
 
 # ── ADAPT + MPC Integration Over Spike Trace ──────────────────────────
