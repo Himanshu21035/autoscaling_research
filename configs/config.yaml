@@ -1,8 +1,3 @@
-
-# configs/config.yaml
-
-
-
 mpc:
   horizon: 12                     # steps ahead (= 12 minutes)
   lambda_cost: 1

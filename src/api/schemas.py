@@ -105,6 +105,7 @@ class PolicyStatusResponse(BaseModel):
 class RunSubmitRequest(BaseModel):
     policy:           str   = Field("mpc")
     forecaster:       str   = Field("lstm")
+    batch:            str   = Field("")
     workload:         str   = Field(
         "diurnal_burst",
         description="Synthetic pattern: diurnal_burst | smooth | bursty | bimodal | flash_crowd",
@@ -123,6 +124,7 @@ class RunSubmitRequest(BaseModel):
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "policy": "mpc", "forecaster": "lstm",
+            "batch": "",
             "workload": "diurnal_burst", "cold_start_s": 120.0,
             "forecast_margin": 1.15, "lambda_sla": 50.0,
             "lambda_cost": 1.0, "lambda_stab": 0.5,
@@ -142,6 +144,7 @@ class RunDetailResponse(BaseModel):
     status:           str
     policy:           str
     forecaster:       str
+    batch:            str
     workload:         str
     cold_start_s:     float
     forecast_margin:  float

@@ -5,6 +5,7 @@ Executes a full run_simulation() call in a ThreadPoolExecutor,
 pushes per-step metrics into metrics_store, and persists to SQLite.
 """
 from __future__ import annotations
+from random import seed
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -78,6 +79,9 @@ def _execute_run(run: ExperimentRun) -> None:
             forecaster=forecaster,
             adapt=adapt if run.policy == "mpc" else None,
             forecast_every=1,
+            cold_start_s=run.cold_start_s,
+            seed=run.seed,
+            cold_start_noise=run.policy != "hpa",
         )
 
         # ── 5. Push ALL per-step metrics to metrics_store ──────────────

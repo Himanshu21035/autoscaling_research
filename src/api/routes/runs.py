@@ -40,6 +40,7 @@ def submit(req: RunSubmitRequest) -> RunSubmitResponse:
 
     run = ExperimentRun(
         policy=req.policy, forecaster=req.forecaster,
+        batch=req.batch,
         workload=req.workload, cold_start_s=req.cold_start_s,
         train_frac=req.train_frac, val_frac=req.val_frac,
         forecast_margin=req.forecast_margin,
@@ -106,6 +107,7 @@ def _row_to_detail(row: dict) -> RunDetailResponse:
         run_id=row["run_id"], status=row["status"],
         policy=row.get("policy", ""),
         forecaster=row.get("forecaster", ""),
+        batch=row.get("batch", ""),
         workload=row.get("workload", ""),
         cold_start_s=row.get("cold_start_s", 120.0),
         forecast_margin=row.get("forecast_margin", 1.15),

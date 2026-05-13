@@ -37,6 +37,28 @@ SIM_CFG = CONFIG["simulator"]
 _SIM_CFG = CONFIG["simulator"]
 adapt_cfg = CONFIG.get("adapt", {})
 
+
+def _sample_cold_start_steps(
+    cold_start_s:  float,
+    timestep_s:    float,
+    rng:           np.random.Generator,
+    noise_low:     float = 0.7,
+    noise_high:    float = 1.3,
+) -> tuple[int, float]:
+    """
+    Sample a stochastic cold-start duration with uniform ±30% jitter.
+
+    Real cloud boot times vary significantly due to image pull latency,
+    node scheduling, and readiness probe delays. ±30% is conservative
+    relative to empirical observations (AWS: ±40-60%, GKE: ±20-50%).
+
+    Returns:
+        (steps, actual_duration_s)
+    """
+    actual_s = cold_start_s * rng.uniform(noise_low, noise_high)
+    steps    = max(1, math.ceil(actual_s / timestep_s))
+    return steps, actual_s
+
 class AutoscalerSimulator:
     """
     Discrete-time autoscaling simulator.
@@ -264,35 +286,27 @@ class SimResult:
 
 
 def run_simulation(
-    trace:          np.ndarray,
-    policy:         BasePolicy,
-    forecaster=None,            # BaseForecaster | None
-    adapt:          ADAPTTracker | None = None,
-    forecast_every: int = 1,    # reforecast every N steps (1 = every step)
-    refine_fit_every: int = 0,  # refit forecaster every N steps (0 = never)
+    trace:            np.ndarray,
+    policy:           BasePolicy,
+    forecaster=None,
+    adapt:            ADAPTTracker | None = None,
+    forecast_every:   int = 1,
+    refine_fit_every: int = 0,
+    cold_start_s:     int | None = None,
+    seed:             int | None = None,          # ← ADD
+    cold_start_noise: bool = True,                # ← ADD (False = deterministic, for HPA/baseline)
 ) -> SimResult:
-    """
-    Run one simulation episode.
-
-    Args:
-        trace:           1D RPS array (test split)
-        policy:          instantiated BasePolicy
-        forecaster:      optional BaseForecaster (already fitted on train split)
-        adapt:           optional ADAPTTracker (shared with MPC policy if given)
-        forecast_every:  how often to call forecaster.predict() [default: every step]
-        refine_fit_every: refit forecaster on expanding window every N steps (0=off)
-
-    Returns:
-        SimResult with per-step metrics and aggregates
-    """
-    # Config
-    cap_per_replica = _SIM_CFG["capacity_per_replica"]
-    cold_start_s    = _SIM_CFG["cold_start_s"]
-    timestep_s      = _SIM_CFG["timestep_seconds"]
-    sla_latency_ms  = _SIM_CFG["sla_latency_ms"]
+    # ── Config ────────────────────────────────────────────────────────
+    cap_per_replica       = _SIM_CFG["capacity_per_replica"]
+    cold_start_s          = cold_start_s if cold_start_s is not None else _SIM_CFG["cold_start_s"]
+    timestep_s            = _SIM_CFG["timestep_seconds"]
+    sla_latency_ms        = _SIM_CFG["sla_latency_ms"]
     cost_per_replica_step = _SIM_CFG.get("cost_per_replica_step", 1.0)
 
     cold_start_steps = max(1, math.ceil(cold_start_s / timestep_s))
+
+    # RNG for stochastic cold-start — seeded for reproducibility
+    rng = np.random.default_rng(seed)
 
     policy_name     = type(policy).__name__
     forecaster_name = forecaster.name if forecaster else "none"
@@ -303,13 +317,14 @@ def run_simulation(
         steps=len(trace),
     )
 
-    # State
-    warm_replicas   = _SIM_CFG.get("initial_replicas", 2)
-    warming_queue: list[tuple[int, int]] = []  # (ready_at_step, n_replicas)
+    # ── State ─────────────────────────────────────────────────────────
+    warm_replicas     = _SIM_CFG.get("initial_replicas", 2)
+    warming_queue: list[tuple[int, int, int]] = []   # (ordered_at, ready_at, n)
     current_forecast: np.ndarray | None = None
     train_buffer: list[float] = []
 
     for step, rps in enumerate(trace):
+
         # ── 1. Reforecast ──────────────────────────────────────────────
         if forecaster is not None and step % forecast_every == 0:
             h = adapt.optimal_horizon() if adapt else cold_start_steps + 1
@@ -322,13 +337,13 @@ def run_simulation(
         # ── 2. Policy decision ─────────────────────────────────────────
         adapt_est = adapt.estimate_s if adapt else cold_start_s
         context = {
-            "warm_replicas":      warm_replicas,
-            "adapt_estimate_s":   adapt_est,
+            "warm_replicas":    warm_replicas,
+            "adapt_estimate_s": adapt_est,
         }
         if current_forecast is not None:
             context["forecast"] = current_forecast
-        
-        # ── FH-OPT: Pass live ADAPT-derived horizon to MPC if available
+
+        # FH-OPT: inject live ADAPT-derived horizon
         if adapt is not None and hasattr(policy, "use_fh_opt") and policy.use_fh_opt:
             context["cold_start_steps"] = max(0, adapt.optimal_horizon() - 1)
 
@@ -339,37 +354,57 @@ def run_simulation(
             **context,
         )
 
-        # ── 3. Cold start queue ────────────────────────────────────────
+        # ── 3. Cold start queue — stochastic boot time ─────────────────
         delta = desired - warm_replicas
         if delta > 0:
-            ready_at = step + cold_start_steps
-            warming_queue.append((ready_at, delta))
-            # Notify ADAPT that a scale-up event was requested
-            if adapt:
-                adapt.observe_event(
-                    t_requested=step * timestep_s,
-                    t_ready=ready_at * timestep_s,
+            if cold_start_noise:
+                # Stochastic: each scale-up event gets its own sampled duration
+                actual_steps, actual_s = _sample_cold_start_steps(
+                    cold_start_s, timestep_s, rng
                 )
+                logger.debug(
+                    f"Step {step}: scale-up +{delta} | "
+                    f"sampled cold_start={actual_s:.1f}s ({actual_steps} steps)"
+                )
+            else:
+                # Deterministic: fixed duration (used for HPA baseline)
+                actual_steps = cold_start_steps
+
+            ready_at = step + actual_steps
+            warming_queue.append((step, ready_at, delta))
+
         elif delta < 0:
             warm_replicas = max(
                 _SIM_CFG.get("min_replicas", 1),
                 warm_replicas + delta,
             )
 
-        # Promote replicas that have finished warming
-        newly_ready = [n for (r, n) in warming_queue if r <= step]
-        warming_queue = [(r, n) for (r, n) in warming_queue if r > step]
-        warm_replicas += sum(newly_ready)
+        # ── 4. Graduate warming replicas + feed ADAPT real durations ───
+        graduated     = [(o, r, n) for (o, r, n) in warming_queue if r <= step]
+        warming_queue = [(o, r, n) for (o, r, n) in warming_queue if r > step]
+
+        for ordered_at, ready_at, n in graduated:
+            warm_replicas += n
+            if adapt:
+                actual_duration_s = (ready_at - ordered_at) * timestep_s
+                adapt.observe(actual_duration_s)
+                logger.debug(
+                    f"Step {step}: {n} replica(s) graduated | "
+                    f"measured={actual_duration_s:.1f}s | "
+                    f"adapt_estimate={adapt.estimate_s:.1f}s | "
+                    f"optimal_horizon={adapt.optimal_horizon()}"
+                )
+
         warm_replicas = min(warm_replicas, _SIM_CFG.get("max_replicas", 50))
 
-        # ── 4. Capacity & metrics ──────────────────────────────────────
-        capacity   = warm_replicas * cap_per_replica
-        utilisation = min(1.0, float(rps) / max(capacity, 1.0))
-        latency_ms  = _compute_latency(utilisation)
+        # ── 5. Capacity & metrics ──────────────────────────────────────
+        capacity     = warm_replicas * cap_per_replica
+        utilisation  = min(1.0, float(rps) / max(capacity, 1.0))
+        latency_ms   = _compute_latency(utilisation)
         sla_violated = latency_ms > sla_latency_ms
         cost         = warm_replicas * cost_per_replica_step
 
-        # ── 5. Online forecaster update ────────────────────────────────
+        # ── 6. Online forecaster update ────────────────────────────────
         if forecaster is not None:
             forecaster.update(float(rps))
             train_buffer.append(float(rps))
@@ -396,7 +431,6 @@ def run_simulation(
         ))
 
     return result.finalise()
-
 
 def _compute_latency(utilisation: float) -> float:
     """

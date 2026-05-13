@@ -72,6 +72,7 @@ class RunDatabase:
     def insert(self, run: ExperimentRun) -> None:
         config = {
             "policy": run.policy, "forecaster": run.forecaster,
+            "batch": run.batch,
             "workload": run.workload, "cold_start_s": run.cold_start_s,
             "train_frac": run.train_frac, "val_frac": run.val_frac,
             "forecast_margin": run.forecast_margin,

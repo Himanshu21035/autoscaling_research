@@ -229,6 +229,7 @@ def test_run_get_after_submit():
     assert body["run_id"]    == rid
     assert body["policy"]    == "hpa"
     assert body["forecaster"] == "none"
+    assert body["batch"] == ""
     assert body["use_fh_opt"] is False
     assert body["status"]    in ("pending", "running", "completed", "failed")
 
@@ -250,6 +251,22 @@ def test_run_submit_with_fh_opt_roundtrip():
     assert body["policy"] == "mpc"
     assert body["cold_start_steps"] == 2
     assert body["use_fh_opt"] is True
+
+
+def test_run_submit_with_batch_roundtrip():
+    r = client.post("/v1/runs", json={
+        "policy": "mpc",
+        "forecaster": "none",
+        "workload": "diurnal_burst",
+        "batch": "batch-7-fhopt",
+    })
+    assert r.status_code == 202
+    rid = r.json()["run_id"]
+
+    r2 = client.get(f"/v1/runs/{rid}")
+    assert r2.status_code == 200
+    body = r2.json()
+    assert body["batch"] == "batch-7-fhopt"
 
 
 def test_run_get_unknown_404():
@@ -313,6 +330,17 @@ def test_database_persists_use_fh_opt():
             row = db.get(run.run_id)
             assert row is not None
             assert row["use_fh_opt"] is True
+
+
+def test_database_persists_batch():
+    with tempfile.TemporaryDirectory() as d:
+        with RunDatabase(Path(d) / "test.db") as db:
+            from src.api.models import ExperimentRun
+            run = ExperimentRun(policy="mpc", forecaster="none", batch="batch-7-fhopt")
+            db.insert(run)
+            row = db.get(run.run_id)
+            assert row is not None
+            assert row["batch"] == "batch-7-fhopt"
 
 
 def test_database_update_status():

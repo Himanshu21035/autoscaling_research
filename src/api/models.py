@@ -27,6 +27,7 @@ class ExperimentRun:
     # Config
     policy:           str   = "mpc"
     forecaster:       str   = "lstm"
+    batch:            str   = ""
     workload:         str   = "diurnal_burst"   # synthetic pattern name
     cold_start_s:     float = 120.0
     train_frac:       float = 0.70
@@ -60,6 +61,7 @@ class ExperimentRun:
             "created_at":       self.created_at,
             "policy":           self.policy,
             "forecaster":       self.forecaster,
+            "batch":            self.batch,
             "workload":         self.workload,
             "cold_start_s":     self.cold_start_s,
             "train_frac":       self.train_frac,
