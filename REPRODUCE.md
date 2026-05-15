@@ -13,7 +13,7 @@ This repository is designed to reproduce the main ADAPT experiments and figures 
 Clone the repository and run:
 
 ```bash
-git clone https://github.com/Himanshu21035/autoscalingresearch
+git clone https://github.com/Himanshu21035/autoscaling_research
 cd autoscalingresearch
 make reproduce
 ```
