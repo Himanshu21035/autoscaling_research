@@ -1,4 +1,3 @@
-# tests/unit/test_simulator.py
 import pytest
 import pandas as pd
 import numpy as np

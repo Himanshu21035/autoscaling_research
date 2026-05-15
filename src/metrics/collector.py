@@ -1,4 +1,3 @@
-# src/metrics/collector.py
 import numpy as np
 import pandas as pd
 from src.logger import get_logger

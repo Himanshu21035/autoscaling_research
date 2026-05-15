@@ -1,4 +1,3 @@
-# src/policies/base.py
 """
 Abstract base class for all autoscaling policies.
 

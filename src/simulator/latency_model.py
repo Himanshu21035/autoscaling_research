@@ -1,6 +1,3 @@
-# src/simulator/latency_model.py
-
-# Maximum latency returned when system is at/over capacity
 MAX_LATENCY_MS = 10_000.0
 
 

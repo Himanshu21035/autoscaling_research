@@ -1,4 +1,3 @@
-# src/metrics/window_buffer.py
 import math
 import threading
 from collections import deque

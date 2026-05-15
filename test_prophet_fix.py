@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 """Quick diagnostic: compare Prophet vs ARIMA forecasts on diurnal+burst data."""
 import numpy as np
 from src.data.loader import load_trace, as_numpy

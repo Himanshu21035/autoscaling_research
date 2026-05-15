@@ -1,4 +1,3 @@
-# src/forecasting/prophet.py
 """
 Prophet Forecaster — Statistical Baseline 2.
 

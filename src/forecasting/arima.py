@@ -1,4 +1,3 @@
-# src/forecasting/arima.py
 """
 ARIMA Forecaster — Statistical Baseline 1.
 

@@ -1,4 +1,3 @@
-# src/simulator/cold_start.py
 from dataclasses import dataclass, field
 from src.logger import get_logger
 

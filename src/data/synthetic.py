@@ -1,4 +1,3 @@
-# src/data/synthetic.py
 """
 Synthetic workload generator for controlled experiments.
 

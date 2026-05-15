@@ -1,4 +1,3 @@
-# src/forecasting/base.py
 """
 Abstract base for all forecasters.
 

@@ -1,4 +1,3 @@
-# tests/unit/test_mpc.py
 import math
 import numpy as np
 from src.policies.mpc import MPCPolicy

@@ -1,4 +1,3 @@
-# tests/unit/test_simulator_core.py
 import numpy as np
 import pytest
 from src.simulator.core import run_simulation, SimResult

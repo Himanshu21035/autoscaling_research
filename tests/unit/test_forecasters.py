@@ -1,4 +1,3 @@
-# tests/unit/test_forecasters.py
 import pytest
 import numpy as np
 import pandas as pd

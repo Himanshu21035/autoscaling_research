@@ -1,4 +1,3 @@
-# src/data/splitter.py
 """
 Train / validation / test splitter for time series.
 

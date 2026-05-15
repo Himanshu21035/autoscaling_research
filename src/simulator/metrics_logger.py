@@ -1,4 +1,3 @@
-# src/simulator/metrics_logger.py
 from dataclasses import dataclass, field, asdict
 import pandas as pd
 

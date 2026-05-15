@@ -1,4 +1,3 @@
-# src/simulator/adapt.py
 """
 ADAPT — Adaptive Cold Start Tracker
 

@@ -1,4 +1,3 @@
-# src/forecasting/lstm.py
 """
 LSTM Forecaster — Neural Baseline.
 
